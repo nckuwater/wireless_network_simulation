@@ -73,6 +73,9 @@ class Map:
 
         self.setup_bss()
 
+        self.border_x = self.exs * self.width
+        self.border_y = self.eys * self.width
+
         self.entries = []
         self.entry_v = {}
 
@@ -89,7 +92,6 @@ class Map:
         for ey in range(1, self.eys):
             self.entries.append(np.array(self.exs, ey) * self.width)
             self.entry_v[self.entries[-1]] = (-1, 0)
-
 
     def setup_bss(self):
         return
@@ -116,7 +118,15 @@ class Map:
             car.move(car.v)
 
     def remove_outside_cars(self):
-        pass
+        remain_cars = []
+        outs = 0
+        for car in self.cars:
+            if not (car.pos[0] < 0 or car.pos[0] > self.border_x or car.pos[1] < 0 or car.pos[1] > self.border_y):
+                remain_cars.append(car)
+            else:
+                outs += 1
+        self.cars = remain_cars
+        return outs
 
     def calculate_received_signal_powers(self):
         for car in self.cars:
@@ -125,6 +135,7 @@ class Map:
                 self.signal_powers[car][bs] = self.received_signal_power(car.pos, bs.pos, self.bss_freq[bs])
 
     def check_handoff(self):
+        # handoff according to selected algorithm
         pass
 
     @staticmethod
