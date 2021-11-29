@@ -8,12 +8,25 @@ class Car:
     v = None  # (vx, vy)
     section_width = 2.5
 
+    bs = None
+    choice_bs = None  # this is a function pointer
+    # choice_bs(car, bss) => bs
+
+    is_calling = False
+    call_seconds = 0
+
     def __init__(self, pos, v):
         self.pos = np.array(pos)
         self.v = np.array(v)
 
     def turn(self, is_left):
         self.v = np.cross((self.v[0], self.v[1], 0), (0, 0, -1 if is_left else 1))
+
+    def update_call(self, prob, seconds=30):
+        # random by prob
+        # if call, set call_seconds to seconds
+        if self.is_calling:
+            pass
 
     @staticmethod
     def get_section(pos, width=section_width):
@@ -57,6 +70,12 @@ class Car:
             self.pos += self.v
 
 
+class BaseStation:
+    def __init__(self, pos, freq):
+        self.pos = np.array(pos)
+        self.freq = freq
+
+
 class Map:
     car_in_lambda = 0.01  # car per second
     # number of entries
@@ -64,10 +83,12 @@ class Map:
     eys = 10
     width = 2.5
 
+    t_power = 120
+
     def __init__(self):
         self.cars = []
         self.bss = []
-        self.bss_freq = {}
+
         self.signal_powers = {}  # {car: {bss: sp}}
         self.car_bss = {}  # which bss car is using
 
@@ -93,7 +114,11 @@ class Map:
             self.entries.append(np.array(self.exs, ey) * self.width)
             self.entry_v[self.entries[-1]] = (-1, 0)
 
-    def setup_bss(self):
+    def setup_bss(self, bss_counts=10, width=width):
+        # random setup bss (list(BaseStation))
+        bs_indexes = random.sample(range(self.exs * self.eys), bss_counts)
+        for index in bs_indexes:
+            self.bss.append(BaseStation((index // self.eys * width, index % self.eys), (index + 1) * 100))
         return
 
     def next_frame(self):
@@ -102,14 +127,14 @@ class Map:
         self.move_cars()
         self.remove_outside_cars()
         self.calculate_received_signal_powers()
-        self.check_handoff()
+        self.handoff()
 
     def poisson_generate_car(self):
         count = 0
         for en in self.entries:
             prob = self.poisson(self.car_in_lambda, 1)
             if random.choices([True, False], [prob, 1 - prob]):
-                self.cars.append(Car((en[0], en[1]), self.entry_v[en]))
+                self.cars.append(Car((en[0], en[1]), list(self.entry_v[en])))
                 count += 1
         return count
 
@@ -132,11 +157,20 @@ class Map:
         for car in self.cars:
             self.signal_powers[car] = {}
             for bs in self.bss:
-                self.signal_powers[car][bs] = self.received_signal_power(car.pos, bs.pos, self.bss_freq[bs])
+                self.signal_powers[car][bs] = self.received_signal_power(self.t_power, car.pos, bs.pos, bs.freq)
 
-    def check_handoff(self):
+    def handoff(self):
         # handoff according to selected algorithm
-        pass
+        # choice bs function in Car class : choice_bs(car, bss) => bs
+        handoff_count = 0
+        for car in self.cars:
+            new_bs = car.choice_bs(car, self.bss)
+            if car.bs is None:
+                car.bs = new_bs
+            elif new_bs != car.bs:
+                handoff_count += 1
+                car.bs = new_bs
+        return handoff_count
 
     @staticmethod
     def poisson(lmd, k):
@@ -146,8 +180,11 @@ class Map:
     def signal_power(freq, dist):
         return 32.45 + 20 * math.log10(freq) + 20 * math.log10(dist)
 
-    def received_signal_power(self, pos1, pos2, freq):
-        return self.signal_power(freq, np.linalg.norm(pos1, pos2))
+    def received_signal_power(self, pt, pos1, pos2, freq):
+        # pt = Transmitting power (dB)
+        # freq = Transmitting frequency (MHz)
+        # pos1, pos2 (km)
+        return pt - self.signal_power(freq, np.linalg.norm(pos1, pos2))
 
 
 if __name__ == '__main__':
