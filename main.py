@@ -8,7 +8,7 @@ class Car:
     v = None  # (vx, vy)
     section_width = 2.5
 
-    def __init__(self,pos, v):
+    def __init__(self, pos, v):
         self.pos = np.array(pos)
         self.v = np.array(v)
 
@@ -33,11 +33,24 @@ class Car:
         if cur_sec != nxt_sec:
             # random turn
             nxt_pos = nxt_sec * width
-            over_length = new_pos - nxt_pos
-            choice = random.choices([0, 1, 2, 3], [16/32, 2/32, 7/32, 7/32])
+            over_length = np.linalg.norm(new_pos - nxt_pos)
+            self.pos = nxt_pos
+            choice = random.choices([0, 1, 2, 3], [16 / 32, 2 / 32, 7 / 32, 7 / 32])
             if choice == 0:
                 # forward
-                pass
+                self.move(over_length)
+            elif choice == 1:
+                # turn back
+                self.v = self.v * -1
+            elif choice == 2:
+                # turn left
+                self.turn(is_left=True)
+                self.move(over_length)
+            elif choice == 3:
+                # turn right
+                self.turn(is_left=False)
+                self.move(over_length)
+
         else:
             self.pos += self.v
 
