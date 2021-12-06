@@ -11,6 +11,7 @@ class Car:
     bs = None
     choice_bs = None  # this is a function pointer
     # choice_bs(car, bss) => bs
+    # this can be used to set to different policy.
 
     is_calling = False
     call_seconds = 0
@@ -65,15 +66,16 @@ class Car:
                 # turn right
                 self.turn(is_left=False)
                 self.move(remain_length)
-
         else:
+            # not crossing intersection, keep going straight
             self.pos += self.v
 
 
 class BaseStation:
-    def __init__(self, pos, freq):
+    def __init__(self, pos, freq, t_power):
         self.pos = np.array(pos)
         self.freq = freq
+        self.t_power = t_power
 
 
 class Map:
@@ -86,6 +88,8 @@ class Map:
     t_power = 120
 
     def __init__(self):
+        # Length in km
+        # freq in MHz
         self.cars = []
         self.bss = []
 
@@ -97,8 +101,8 @@ class Map:
         self.border_x = self.exs * self.width
         self.border_y = self.eys * self.width
 
-        self.entries = []
-        self.entry_v = {}
+        self.entries = []  # entry points
+        self.entry_v = {}  # initial velocity of each entry
 
         for ex in range(1, self.exs):
             self.entries.append(np.array(ex, 0) * self.width)
@@ -118,7 +122,7 @@ class Map:
         # random setup bss (list(BaseStation))
         bs_indexes = random.sample(range(self.exs * self.eys), bss_counts)
         for index in bs_indexes:
-            self.bss.append(BaseStation((index // self.eys * width, index % self.eys), (index + 1) * 100))
+            self.bss.append(BaseStation((index // self.eys * width, index % self.eys), (index + 1) * 100, self.t_power))
         return
 
     def next_frame(self):
@@ -157,19 +161,20 @@ class Map:
         for car in self.cars:
             self.signal_powers[car] = {}
             for bs in self.bss:
-                self.signal_powers[car][bs] = self.received_signal_power(self.t_power, car.pos, bs.pos, bs.freq)
+                self.signal_powers[car][bs] = self.received_signal_power(bs.t_power, car.pos, bs.pos, bs.freq)
 
     def handoff(self):
         # handoff according to selected algorithm
         # choice bs function in Car class : choice_bs(car, bss) => bs
         handoff_count = 0
         for car in self.cars:
-            new_bs = car.choice_bs(car, self.bss)
-            if car.bs is None:
-                car.bs = new_bs
-            elif new_bs != car.bs:
-                handoff_count += 1
-                car.bs = new_bs
+            if car.is_calling:
+                new_bs = car.choice_bs(car, self.bss)
+                if car.bs is None:
+                    car.bs = new_bs
+                elif new_bs != car.bs:
+                    handoff_count += 1
+                    car.bs = new_bs
         return handoff_count
 
     @staticmethod
@@ -177,14 +182,15 @@ class Map:
         return math.exp(-1 * lmd) * math.pow(lmd, k) / math.factorial(k)
 
     @staticmethod
-    def signal_power(freq, dist):
+    def signal_path_loss(freq, dist):
+        # freq(MHZ), dist(km)
         return 32.45 + 20 * math.log10(freq) + 20 * math.log10(dist)
 
     def received_signal_power(self, pt, pos1, pos2, freq):
         # pt = Transmitting power (dB)
         # freq = Transmitting frequency (MHz)
         # pos1, pos2 (km)
-        return pt - self.signal_power(freq, np.linalg.norm(pos1, pos2))
+        return pt - self.signal_path_loss(freq, np.linalg.norm(pos1, pos2))
 
 
 if __name__ == '__main__':
