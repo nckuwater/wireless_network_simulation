@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import random
+import pprint
 
 
 class Car:
@@ -8,7 +9,7 @@ class Car:
     v = None  # (vx, vy)
     section_width = 2.5
 
-    bs = None
+    bs = None  # bs currently connecting, should clear on release
     choice_bs = None  # this is a function pointer
     # choice_bs(car, bss) => bs
     # this can be used to set to different policy.
@@ -80,7 +81,7 @@ class BaseStation:
 
 class Map:
     car_in_lambda = 0.01  # car per second
-    # number of entries
+    # number of blocks
     exs = 10
     eys = 10
     width = 2.5
@@ -104,19 +105,21 @@ class Map:
         self.entries = []  # entry points
         self.entry_v = {}  # initial velocity of each entry
 
-        for ex in range(1, self.exs):
-            self.entries.append(np.array(ex, 0) * self.width)
+        # due to numpy array is not hashable, store as tuple
+        for ex in range(1, self.exs + 1):
+            self.entries.append((ex * self.width, 0))
             self.entry_v[self.entries[-1]] = (0, 1)
-        for ex in range(1, self.exs):
-            self.entries.append(np.array(ex, self.eys) * self.width)
+        for ex in range(1, self.exs + 1):
+            self.entries.append((ex * self.width, self.eys * self.width))
             self.entry_v[self.entries[-1]] = (0, -1)
 
-        for ey in range(1, self.eys):
-            self.entries.append(np.array(0, ey) * self.width)
+        for ey in range(1, self.eys + 1):
+            self.entries.append((0, ey * self.width))
             self.entry_v[self.entries[-1]] = (1, 0)
-        for ey in range(1, self.eys):
-            self.entries.append(np.array(self.exs, ey) * self.width)
+        for ey in range(1, self.eys + 1):
+            self.entries.append((self.exs * self.width, ey * self.width))
             self.entry_v[self.entries[-1]] = (-1, 0)
+        pprint.pprint(self.entries)
 
     def setup_bss(self, bss_counts=10, width=width):
         # random setup bss (list(BaseStation))
@@ -195,3 +198,5 @@ class Map:
 
 if __name__ == '__main__':
     print('hello')
+    m = Map()
+    m.setup_bss(10, 2.5)
