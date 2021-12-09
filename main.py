@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 class Car:
     pos = None
     v = None  # (vx, vy)
+    cur_section = None
     section_width = 2.5
 
     bs = None  # bs currently connecting, should clear on release
@@ -24,9 +25,15 @@ class Car:
     def __init__(self, pos, v):
         self.pos = np.array(pos)
         self.v = np.array(v)
+        self.cur_section = self.get_section(self.pos)
 
     def turn(self, is_left):
-        self.v = np.cross((self.v[0], self.v[1], 0), (0, 0, -1 if is_left else 1))
+        self.v = np.cross((self.v[0], self.v[1], 0), (0, 0, -1 if is_left else 1))[0:2]
+        print(self.v)
+
+    @staticmethod
+    def turn_vec(v, is_left):
+        return np.cross((v[0], v[1], 0), (0, 0, -1 if is_left else 1))[0:2]
 
     def update_call(self, prob, seconds=30):
         # random by prob
@@ -49,35 +56,42 @@ class Car:
         # next pos after a time unit
         return pos + v
 
-    def move(self, length=None, width=section_width):
+    def move(self, vel=None, width=section_width):
         # need to random turn if meet intersection
-        if length is None:
-            length = self.v
-        cur_sec = self.get_section(self.pos)
-        new_pos = self.next_pos(self.pos, length)
+        if vel is None:
+            vel = self.v
+        cur_sec = self.cur_section
+        new_pos = self.next_pos(self.pos, vel)
         nxt_sec = self.get_section(new_pos)
-        if (cur_sec != nxt_sec).all():
+        self.cur_section = nxt_sec
+        if (cur_sec != nxt_sec).any():
             # random turn
             nxt_pos = nxt_sec * width
-            remain_length = np.linalg.norm(new_pos - nxt_pos)
+            if vel[0] < 0:
+                nxt_pos[0] += width
+            if vel[1] < 0:
+                nxt_pos[1] += width
+
+            # remain_length = np.linalg.norm(new_pos - nxt_pos)
+            remain_v = new_pos - nxt_pos
             self.pos = nxt_pos
 
-            choice = random.choices([0, 1, 2, 3], [16 / 32, 2 / 32, 7 / 32, 7 / 32])
+            choice = random.choices([0, 1, 2, 3], [16 / 32, 2 / 32, 7 / 32, 7 / 32])[0]
             if choice == 0:
                 # forward
-                self.move(remain_length)
+                self.move(remain_v)
             elif choice == 1:
                 # turn back
                 self.v = self.v * -1
-                self.move(remain_length)
+                self.move(remain_v)
             elif choice == 2:
                 # turn left
                 self.turn(is_left=True)
-                self.move(remain_length)
+                self.move(self.turn_vec(remain_v, is_left=True))
             elif choice == 3:
                 # turn right
                 self.turn(is_left=False)
-                self.move(remain_length)
+                self.move(self.turn_vec(remain_v, is_left=False))
         else:
             # not crossing intersection, keep going straight
             self.pos += self.v
@@ -120,11 +134,14 @@ class BaseStation:
 
 
 class Map:
-    car_in_lambda = 0.01  # car per second
+    car_in_lambda = 1 / 12  # car per second
+    # car_in_entry_lambda = None  # prob for each entry
     # number of blocks
     exs = 10
     eys = 10
     width = 2.5
+
+    car_v_val = 72 / 18 * 5 / 1000  # in km/s
 
     t_power = 120
 
@@ -150,24 +167,25 @@ class Map:
         # due to numpy array is not hashable, store as tuple
         for ex in range(1, self.exs):
             self.entries.append((ex * self.width, 0))
-            self.entry_v[self.entries[-1]] = (0, 1)
+            self.entry_v[self.entries[-1]] = (0, self.car_v_val)
         for ex in range(1, self.exs):
             self.entries.append((ex * self.width, self.eys * self.width))
-            self.entry_v[self.entries[-1]] = (0, -1)
+            self.entry_v[self.entries[-1]] = (0, -self.car_v_val)
 
         for ey in range(1, self.eys):
             self.entries.append((0, ey * self.width))
-            self.entry_v[self.entries[-1]] = (1, 0)
+            self.entry_v[self.entries[-1]] = (self.car_v_val, 0)
         for ey in range(1, self.eys):
             self.entries.append((self.exs * self.width, ey * self.width))
-            self.entry_v[self.entries[-1]] = (-1, 0)
+            self.entry_v[self.entries[-1]] = (-self.car_v_val, 0)
         # pprint.pprint(self.entries)
 
     def setup_bss(self, bss_counts=10, width=width):
         # random setup bss (list(BaseStation))
         bs_indexes = random.sample(range(self.exs * self.eys), bss_counts)
         for index in bs_indexes:
-            self.bss.append(BaseStation((index // self.eys * width, index % self.eys), (index + 1) * 100, self.t_power))
+            self.bss.append(BaseStation((index // self.eys * width + width/2, index % self.eys * width + width/2),
+                                        (index + 1) * 100, self.t_power))
         return
 
     def next_frame(self):
@@ -182,7 +200,8 @@ class Map:
         count = 0
         for en in self.entries:
             prob = self.poisson(self.car_in_lambda, 1)
-            if random.choices([True, False], [prob, 1 - prob]):
+            # print(random.choices([True, False], [prob, 1 - prob]))
+            if random.choices([True, False], [prob, 1 - prob])[0]:
                 new_car = Car((en[0], en[1]), list(self.entry_v[en]))
                 new_car.choice_bs = self.car_choice_bs_function
                 self.cars.append(new_car)
@@ -233,7 +252,7 @@ class Map:
     @staticmethod
     def signal_path_loss(freq, dist):
         # freq(MHZ), dist(km)
-        print(freq, dist)
+        # print(freq, dist)
         if dist != 0:
             return 32.45 + 20 * math.log10(freq) + 20 * math.log10(dist)
         else:
@@ -251,9 +270,36 @@ if __name__ == '__main__':
     m = Map()
     m.setup_bss(10, 2.5)
     m.car_choice_bs_function = lambda c: Car.policy_minimum(c, 100)
+    plt.ion()
+
     while True:
         handoff_count = m.next_frame()
         print('-' * 20)
         print('car count:', len(m.cars))
         print('handoff count:', handoff_count)
-        time.sleep(1)
+
+        xs = [c.pos[0] for c in m.cars]
+        ys = [c.pos[1] for c in m.cars]
+        base_xs = [b.pos[0] for b in m.bss]
+        base_ys = [b.pos[1] for b in m.bss]
+        xt = []
+        yt = []
+        x = 0
+        while x <= 25:
+            xt.append(x)
+            yt.append(x)
+            x += 2.5
+        plt.xticks(xt)
+        plt.yticks(yt)
+        plt.axis([0, 25, 0, 25])
+        plt.scatter(xs, ys, s=20)
+        plt.scatter(base_xs, base_ys, s=30, c='orange')
+        for c in m.cars:
+            if c.is_calling:
+                plt.plot((c.pos[0], c.bs.pos[0]), (c.pos[1], c.bs.pos[1]))
+        plt.grid(True)
+        plt.draw()
+
+        # time.sleep(1)
+        plt.pause(0.05)
+        plt.clf()
