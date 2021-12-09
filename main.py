@@ -1,7 +1,10 @@
 import math
+import time
+
 import numpy as np
 import random
 import pprint
+import matplotlib.pyplot as plt
 
 
 class Car:
@@ -11,6 +14,7 @@ class Car:
 
     bs = None  # bs currently connecting, should clear on release
     choice_bs = None  # this is a function pointer
+    signal_powers = {}
     # choice_bs(car, bss) => bs
     # this can be used to set to different policy.
 
@@ -28,6 +32,12 @@ class Car:
         # random by prob
         # if call, set call_seconds to seconds
         if self.is_calling:
+            self.call_seconds -= 1
+            if self.call_seconds <= 0:
+                self.is_calling = False
+            pass
+        else:
+            # normal distribution to call
             pass
 
     @staticmethod
@@ -36,6 +46,7 @@ class Car:
 
     @staticmethod
     def next_pos(pos: np.ndarray, v: np.ndarray):
+        # next pos after a time unit
         return pos + v
 
     def move(self, length=None, width=section_width):
@@ -45,7 +56,7 @@ class Car:
         cur_sec = self.get_section(self.pos)
         new_pos = self.next_pos(self.pos, length)
         nxt_sec = self.get_section(new_pos)
-        if cur_sec != nxt_sec:
+        if (cur_sec != nxt_sec).all():
             # random turn
             nxt_pos = nxt_sec * width
             remain_length = np.linalg.norm(new_pos - nxt_pos)
@@ -71,6 +82,35 @@ class Car:
             # not crossing intersection, keep going straight
             self.pos += self.v
 
+    # handoff policy for cars
+    # use lambda to set those custom parameters
+    @staticmethod
+    def policy_minimum(car, min_sp):
+        if not car.bs:
+            best_bs = max(car.signal_powers, key=car.get)
+            return best_bs
+        if car.signal_powers[car.bs] < min_sp:
+            best_bs = max(car.signal_powers, key=car.get)
+            return best_bs
+        return car.bs
+
+    @staticmethod
+    def policy_best_effort(car):
+        return max(car.signal_powers, key=car.get)
+
+    @staticmethod
+    def policy_entropy(car, ent_val):
+        best_bs = max(car.signal_powers, key=car.get)
+        if not car.bs:
+            return best_bs
+        if (car.signal_powers[best_bs] - car.signal_powers[car.bs]) > ent_val:
+            return best_bs
+        return car.bs
+
+    @staticmethod
+    def policy_diy(car):
+        pass
+
 
 class BaseStation:
     def __init__(self, pos, freq, t_power):
@@ -87,6 +127,8 @@ class Map:
     width = 2.5
 
     t_power = 120
+
+    car_choice_bs_function = None
 
     def __init__(self):
         # Length in km
@@ -106,20 +148,20 @@ class Map:
         self.entry_v = {}  # initial velocity of each entry
 
         # due to numpy array is not hashable, store as tuple
-        for ex in range(1, self.exs + 1):
+        for ex in range(1, self.exs):
             self.entries.append((ex * self.width, 0))
             self.entry_v[self.entries[-1]] = (0, 1)
-        for ex in range(1, self.exs + 1):
+        for ex in range(1, self.exs):
             self.entries.append((ex * self.width, self.eys * self.width))
             self.entry_v[self.entries[-1]] = (0, -1)
 
-        for ey in range(1, self.eys + 1):
+        for ey in range(1, self.eys):
             self.entries.append((0, ey * self.width))
             self.entry_v[self.entries[-1]] = (1, 0)
-        for ey in range(1, self.eys + 1):
+        for ey in range(1, self.eys):
             self.entries.append((self.exs * self.width, ey * self.width))
             self.entry_v[self.entries[-1]] = (-1, 0)
-        pprint.pprint(self.entries)
+        # pprint.pprint(self.entries)
 
     def setup_bss(self, bss_counts=10, width=width):
         # random setup bss (list(BaseStation))
@@ -134,14 +176,16 @@ class Map:
         self.move_cars()
         self.remove_outside_cars()
         self.calculate_received_signal_powers()
-        self.handoff()
+        return self.handoff()
 
     def poisson_generate_car(self):
         count = 0
         for en in self.entries:
             prob = self.poisson(self.car_in_lambda, 1)
             if random.choices([True, False], [prob, 1 - prob]):
-                self.cars.append(Car((en[0], en[1]), list(self.entry_v[en])))
+                new_car = Car((en[0], en[1]), list(self.entry_v[en]))
+                new_car.choice_bs = self.car_choice_bs_function
+                self.cars.append(new_car)
                 count += 1
         return count
 
@@ -162,9 +206,11 @@ class Map:
 
     def calculate_received_signal_powers(self):
         for car in self.cars:
-            self.signal_powers[car] = {}
+            # self.signal_powers[car] = {}
+            car.signal_powers = {}
             for bs in self.bss:
-                self.signal_powers[car][bs] = self.received_signal_power(bs.t_power, car.pos, bs.pos, bs.freq)
+                # self.signal_powers[car][bs] = self.received_signal_power(bs.t_power, car.pos, bs.pos, bs.freq)
+                car.signal_powers[bs] = self.received_signal_power(bs.t_power, car.pos, bs.pos, bs.freq)
 
     def handoff(self):
         # handoff according to selected algorithm
@@ -187,16 +233,27 @@ class Map:
     @staticmethod
     def signal_path_loss(freq, dist):
         # freq(MHZ), dist(km)
-        return 32.45 + 20 * math.log10(freq) + 20 * math.log10(dist)
+        print(freq, dist)
+        if dist != 0:
+            return 32.45 + 20 * math.log10(freq) + 20 * math.log10(dist)
+        else:
+            return 32.45 + 20 * math.log10(freq)
 
     def received_signal_power(self, pt, pos1, pos2, freq):
         # pt = Transmitting power (dB)
         # freq = Transmitting frequency (MHz)
         # pos1, pos2 (km)
-        return pt - self.signal_path_loss(freq, np.linalg.norm(pos1, pos2))
+        return pt - self.signal_path_loss(freq, abs(np.linalg.norm(pos1 - pos2)))
 
 
 if __name__ == '__main__':
     print('hello')
     m = Map()
     m.setup_bss(10, 2.5)
+    m.car_choice_bs_function = lambda c: Car.policy_minimum(c, 100)
+    while True:
+        handoff_count = m.next_frame()
+        print('-' * 20)
+        print('car count:', len(m.cars))
+        print('handoff count:', handoff_count)
+        time.sleep(1)
