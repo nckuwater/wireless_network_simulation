@@ -18,8 +18,8 @@ class Car:
     # bs = {choice_bs: bs}
     bs = None  # bs currently connecting, should clear on release
     # choice_bs = None  # this is a function pointer
-    signal_powers = {}
-    is_just_handoff = {}  # non-zero if just handoff (value for display different color for a while)
+    signal_powers = None
+    is_just_handoff = None  # non-zero if just handoff (value for display different color for a while)
 
     # Deprecated, this is only for single algorithm #
     # this can be used to set to different policy.
@@ -41,7 +41,9 @@ class Car:
         self.time_unit = time_unit
         self.choice_bs_set = choice_bs_set
 
+        self.signal_powers = {}
         self.bs = {}
+        self.is_just_handoff = {}
         # choice bs functions
         for cbs in choice_bs_set:
             self.bs[cbs] = None
@@ -157,12 +159,14 @@ class Car:
 
 class BaseStation:
     # car_count = {choice_bs: car_count}
-    car_count = {}
+    car_count = None
 
     def __init__(self, pos, freq, t_power):
         self.pos = np.array(pos)
         self.freq = freq
         self.t_power = t_power
+
+        self.car_count = {}
 
     def __repr__(self):
         return f'bs pos: {self.pos}\n' \
@@ -295,7 +299,12 @@ class Map:
         handoff_count = {}
         for cbs in self.car_choice_bs_set:
             handoff_count[cbs] = 0
-
+            for bs in self.bss:
+                bs.car_count[cbs] = 0
+        # for cbs in self.car_choice_bs_set:
+        #     for car in self.cars:
+        #         if car.bs[cbs] is not None:
+        #             car.bs[cbs].car_count[cbs] += 1
         for car in self.cars:
             for cbs in self.car_choice_bs_set:
                 if car.is_just_handoff[cbs] > 0:
@@ -318,16 +327,12 @@ class Map:
                         handoff_count[cbs] += 1
                         car.is_just_handoff[cbs] = 30
                         car.bs[cbs] = new_bs
+
+                        car.bs[cbs].car_count[cbs] += 1
                     else:
                         # keep connecting
+                        car.bs[cbs].car_count[cbs] += 1
                         pass
-
-        for cbs in self.car_choice_bs_set:
-            for bs in self.bss:
-                bs.car_count[cbs] = 0
-            for car in self.cars:
-                if car.bs[cbs] is not None:
-                    car.bs[cbs].car_count[cbs] += 1
 
         return handoff_count
 
@@ -362,7 +367,22 @@ if __name__ == '__main__':
     h_count = 0
     current_time = 0
     selected_choice_bs = m.car_choice_bs_set[1]
+    # color setting
+    car_color = 'steelblue'
+    car_calling_color = 'red'
+    # ticks
+    xt = []
+    yt = []
+    x = 0
+    base_xs = [b.pos[0] for b in m.bss]
+    base_ys = [b.pos[1] for b in m.bss]
+    while x <= 25:
+        xt.append(x)
+        yt.append(x)
+        x += 2.5
+
     while True:
+        start_time = time.perf_counter()
         current_time += 1
         h_count += m.next_frame()[selected_choice_bs]
         print('-' * 20)
@@ -371,17 +391,9 @@ if __name__ == '__main__':
 
         xs = [c.pos[0] for c in m.cars]
         ys = [c.pos[1] for c in m.cars]
-        base_xs = [b.pos[0] for b in m.bss]
-        base_ys = [b.pos[1] for b in m.bss]
-        colors = [('red' if c.is_calling else 'steelblue') for c in m.cars]
-        # print(colors)
-        xt = []
-        yt = []
-        x = 0
-        while x <= 25:
-            xt.append(x)
-            yt.append(x)
-            x += 2.5
+
+        colors = [(car_calling_color if c.is_calling else car_color) for c in m.cars]
+
         plt.subplot(121)
         plt.title(f'time: {current_time} s')
         plt.xticks(xt)
@@ -403,13 +415,19 @@ if __name__ == '__main__':
             plt.annotate(txt, (base_xs[i], base_ys[i]))
         plt.grid(True)
         # pprint.pprint(m.bss)
-        # plt.subplot(122)
-        # bs_index = [i for i in range(len(m.bss))]
-        # bs_service_counts = [b.car_count[selected_choice_bs] for b in m.bss]
-        # plt.bar(bs_index, bs_service_counts)
-        # print(bs_service_counts)
+        plt.subplot(122)
+        bs_index = [i for i in range(len(m.bss))]
+        bs_service_counts = [b.car_count[selected_choice_bs] for b in m.bss]
+        plt.xticks(bs_index)
+        plt.bar(bs_index, bs_service_counts)
+        print(bs_service_counts)
 
         plt.draw()
         # time.sleep(1)
-        plt.pause(0.05)
+        interval = 0.04
+        print('pause:', (start_time + interval) - time.perf_counter())
+        delay_time = (start_time + interval) - time.perf_counter()
+        if delay_time > 0:
+            plt.pause(delay_time)
+        plt.pause(0.01)
         plt.clf()
