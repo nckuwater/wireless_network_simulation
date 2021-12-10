@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 
 
 class Car:
+    time_unit = 1
+
     pos = None
     v = None  # (vx, vy)
     cur_section = None
@@ -16,16 +18,23 @@ class Car:
     bs = None  # bs currently connecting, should clear on release
     choice_bs = None  # this is a function pointer
     signal_powers = {}
+    is_just_handoff = 0  # True if just handoff
     # choice_bs(car, bss) => bs
     # this can be used to set to different policy.
+
+    calling_prob = 0  # call/second
+    calling_interval_mean = 0  # seconds/call
 
     is_calling = False
     call_seconds = 0
 
-    def __init__(self, pos, v):
+    def __init__(self, pos, v, calling_prob, calling_interval_mean, time_unit=time_unit):
         self.pos = np.array(pos)
         self.v = np.array(v)
         self.cur_section = self.get_section(self.pos)
+        self.calling_prob = calling_prob
+        self.calling_interval_mean = calling_interval_mean
+        self.time_unit = time_unit
 
     def turn(self, is_left):
         self.v = np.cross((self.v[0], self.v[1], 0), (0, 0, -1 if is_left else 1))[0:2]
@@ -35,17 +44,22 @@ class Car:
     def turn_vec(v, is_left):
         return np.cross((v[0], v[1], 0), (0, 0, -1 if is_left else 1))[0:2]
 
-    def update_call(self, prob, seconds=30):
+    def update_call(self):
         # random by prob
         # if call, set call_seconds to seconds
         if self.is_calling:
-            self.call_seconds -= 1
+            self.call_seconds -= self.time_unit
             if self.call_seconds <= 0:
                 self.is_calling = False
+                self.bs = None
+                self.call_seconds = 0
             pass
         else:
             # normal distribution to call
-            pass
+            if random.choices([True, False], [self.calling_prob, 1 - self.calling_prob])[0]:
+                # call
+                self.is_calling = True
+                self.call_seconds = np.random.normal(self.calling_interval_mean)
 
     @staticmethod
     def get_section(pos, width=section_width):
@@ -101,20 +115,20 @@ class Car:
     @staticmethod
     def policy_minimum(car, min_sp):
         if not car.bs:
-            best_bs = max(car.signal_powers, key=car.get)
+            best_bs = max(car.signal_powers, key=car.signal_powers.get)
             return best_bs
         if car.signal_powers[car.bs] < min_sp:
-            best_bs = max(car.signal_powers, key=car.get)
+            best_bs = max(car.signal_powers, key=car.signal_powers.get)
             return best_bs
         return car.bs
 
     @staticmethod
     def policy_best_effort(car):
-        return max(car.signal_powers, key=car.get)
+        return max(car.signal_powers, key=car.signal_powers.get)
 
     @staticmethod
     def policy_entropy(car, ent_val):
-        best_bs = max(car.signal_powers, key=car.get)
+        best_bs = max(car.signal_powers, key=car.signal_powers.get)
         if not car.bs:
             return best_bs
         if (car.signal_powers[best_bs] - car.signal_powers[car.bs]) > ent_val:
@@ -127,27 +141,44 @@ class Car:
 
 
 class BaseStation:
+    car_count = 0
+
     def __init__(self, pos, freq, t_power):
         self.pos = np.array(pos)
         self.freq = freq
         self.t_power = t_power
 
+    def __repr__(self):
+        return f'bs pos: {self.pos}\n' \
+               f'   freq: {self.freq}\n' \
+               f'   t_power: {self.t_power}\n'
+
 
 class Map:
+    time_unit = 1  # seconds/frame
     car_in_lambda = 1 / 12  # car per second
+
+    # calling parameters
+    car_calling_prob = 2 / 60 / 60  # calls/second
+    car_calling_interval_mean = 180  # seconds/call
+
     # car_in_entry_lambda = None  # prob for each entry
     # number of blocks
     exs = 10
     eys = 10
     width = 2.5
 
-    car_v_val = 72 / 18 * 5 / 1000  # in km/s
+    car_v_val = (72 / 18 * 5) / 1000  # in km/s
 
-    t_power = 120
+    t_power = 120  # transmitting power
 
-    car_choice_bs_function = None
+    car_choice_bs_function = None  # algorithm to choice bs by signals
 
-    def __init__(self):
+    def __init__(self, time_unit=1):
+        # convert time units
+        self.car_in_lambda /= self.time_unit
+        self.car_v_val *= self.time_unit
+
         # Length in km
         # freq in MHz
         self.cars = []
@@ -155,8 +186,6 @@ class Map:
 
         self.signal_powers = {}  # {car: {bss: sp}}
         self.car_bss = {}  # which bss car is using
-
-        self.setup_bss()
 
         self.border_x = self.exs * self.width
         self.border_y = self.eys * self.width
@@ -183,9 +212,11 @@ class Map:
     def setup_bss(self, bss_counts=10, width=width):
         # random setup bss (list(BaseStation))
         bs_indexes = random.sample(range(self.exs * self.eys), bss_counts)
+        freq = 100
         for index in bs_indexes:
-            self.bss.append(BaseStation((index // self.eys * width + width/2, index % self.eys * width + width/2),
-                                        (index + 1) * 100, self.t_power))
+            self.bss.append(BaseStation((index // self.eys * width + width / 2, index % self.eys * width + width / 2),
+                                        freq, self.t_power))
+            freq += 100
         return
 
     def next_frame(self):
@@ -194,6 +225,7 @@ class Map:
         self.move_cars()
         self.remove_outside_cars()
         self.calculate_received_signal_powers()
+        self.update_cars_call()
         return self.handoff()
 
     def poisson_generate_car(self):
@@ -202,7 +234,8 @@ class Map:
             prob = self.poisson(self.car_in_lambda, 1)
             # print(random.choices([True, False], [prob, 1 - prob]))
             if random.choices([True, False], [prob, 1 - prob])[0]:
-                new_car = Car((en[0], en[1]), list(self.entry_v[en]))
+                new_car = Car((en[0], en[1]), list(self.entry_v[en]),
+                              self.car_calling_prob, self.car_calling_interval_mean)
                 new_car.choice_bs = self.car_choice_bs_function
                 self.cars.append(new_car)
                 count += 1
@@ -211,6 +244,10 @@ class Map:
     def move_cars(self):
         for car in self.cars:
             car.move(car.v)
+
+    def update_cars_call(self):
+        for car in self.cars:
+            car.update_call()
 
     def remove_outside_cars(self):
         remain_cars = []
@@ -235,14 +272,30 @@ class Map:
         # handoff according to selected algorithm
         # choice bs function in Car class : choice_bs(car, bss) => bs
         handoff_count = 0
+
         for car in self.cars:
+            if car.is_just_handoff > 0:
+                # this value can be used to plot color to inform if this just handoff
+                car.is_just_handoff -= 0
+
             if car.is_calling:
-                new_bs = car.choice_bs(car, self.bss)
+                # new_bs = car.choice_bs(car, self.bss)
+                new_bs = car.choice_bs(car)
+
                 if car.bs is None:
+                    # initial connect
                     car.bs = new_bs
                 elif new_bs != car.bs:
+                    # do handoff
                     handoff_count += 1
+                    car.is_just_handoff = 30
                     car.bs = new_bs
+        for bs in self.bss:
+            bs.car_count = 0
+        for car in self.cars:
+            if car.bs:
+                car.bs.car_count += 1
+
         return handoff_count
 
     @staticmethod
@@ -270,18 +323,24 @@ if __name__ == '__main__':
     m = Map()
     m.setup_bss(10, 2.5)
     m.car_choice_bs_function = lambda c: Car.policy_minimum(c, 100)
+    # pprint.pprint(m.bss)
+    # exit(0)
     plt.ion()
-
+    h_count = 0
+    current_time = 0
     while True:
-        handoff_count = m.next_frame()
+        current_time += 1
+        h_count += m.next_frame()
         print('-' * 20)
         print('car count:', len(m.cars))
-        print('handoff count:', handoff_count)
+        print('handoff count:', h_count)
 
         xs = [c.pos[0] for c in m.cars]
         ys = [c.pos[1] for c in m.cars]
         base_xs = [b.pos[0] for b in m.bss]
         base_ys = [b.pos[1] for b in m.bss]
+        colors = [('red' if c.is_calling else 'steelblue') for c in m.cars]
+        print(colors)
         xt = []
         yt = []
         x = 0
@@ -289,15 +348,31 @@ if __name__ == '__main__':
             xt.append(x)
             yt.append(x)
             x += 2.5
+        plt.subplot(121)
+        plt.title(f'time: {current_time} s')
         plt.xticks(xt)
         plt.yticks(yt)
         plt.axis([0, 25, 0, 25])
-        plt.scatter(xs, ys, s=20)
+        # plt.scatter(xs, ys, s=20)
+        plt.scatter(xs, ys, s=20, c=colors)
         plt.scatter(base_xs, base_ys, s=30, c='orange')
+
         for c in m.cars:
             if c.is_calling:
-                plt.plot((c.pos[0], c.bs.pos[0]), (c.pos[1], c.bs.pos[1]))
+                plt.plot((c.pos[0], c.bs.pos[0]), (c.pos[1], c.bs.pos[1]),
+                         c='yellow' if c.is_just_handoff == 0 else 'red')
+
+        bs_freqs = [b.freq for b in m.bss]
+        for i, txt in enumerate(bs_freqs):
+            plt.annotate(txt, (base_xs[i], base_ys[i]))
         plt.grid(True)
+
+        plt.subplot(122)
+        bs_index = [i for i in range(len(m.bss))]
+        bs_service_counts = [b.car_count for b in m.bss]
+        plt.bar(bs_index, bs_service_counts)
+        print(bs_service_counts)
+
         plt.draw()
 
         # time.sleep(1)
