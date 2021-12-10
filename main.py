@@ -15,12 +15,15 @@ class Car:
     cur_section = None
     section_width = 2.5
 
-    bs = None  # bs currently connecting, should clear on release
-    choice_bs = None  # this is a function pointer
+    # bs = {choice_bs: bs}
+    bs = {}  # bs currently connecting, should clear on release
+    # choice_bs = None  # this is a function pointer
     signal_powers = {}
-    is_just_handoff = 0  # True if just handoff
-    # choice_bs(car, bss) => bs
+    is_just_handoff = {}  # non-zero if just handoff (value for display different color for a while)
+
+    # Deprecated, this is only for single algorithm #
     # this can be used to set to different policy.
+    # choice_bs(car, bss) => bs
 
     calling_prob = 0  # call/second
     calling_interval_mean = 0  # seconds/call
@@ -28,13 +31,18 @@ class Car:
     is_calling = False
     call_seconds = 0
 
-    def __init__(self, pos, v, calling_prob, calling_interval_mean, time_unit=time_unit):
+    def __init__(self, pos, v, calling_prob, calling_interval_mean, choice_bs_set, time_unit=time_unit):
         self.pos = np.array(pos)
         self.v = np.array(v)
         self.cur_section = self.get_section(self.pos)
         self.calling_prob = calling_prob
         self.calling_interval_mean = calling_interval_mean
         self.time_unit = time_unit
+
+        # choice bs functions
+        for cbs in choice_bs_set:
+            self.bs[cbs] = None
+            self.is_just_handoff[cbs] = 0
 
     def turn(self, is_left):
         self.v = np.cross((self.v[0], self.v[1], 0), (0, 0, -1 if is_left else 1))[0:2]
@@ -51,7 +59,8 @@ class Car:
             self.call_seconds -= self.time_unit
             if self.call_seconds <= 0:
                 self.is_calling = False
-                self.bs = None
+                # self.bs = None
+                self.clear_bs()
                 self.call_seconds = 0
             pass
         else:
@@ -60,6 +69,11 @@ class Car:
                 # call
                 self.is_calling = True
                 self.call_seconds = np.random.normal(self.calling_interval_mean)
+
+    def clear_bs(self):
+        for k, v in self.bs.items():
+            # k is choice bs function
+            self.bs[k] = None
 
     @staticmethod
     def get_section(pos, width=section_width):
@@ -141,7 +155,8 @@ class Car:
 
 
 class BaseStation:
-    car_count = 0
+    # car_count = {choice_bs: car_count}
+    car_count = {}
 
     def __init__(self, pos, freq, t_power):
         self.pos = np.array(pos)
@@ -172,7 +187,11 @@ class Map:
 
     t_power = 120  # transmitting power
 
-    car_choice_bs_function = None  # algorithm to choice bs by signals
+    car_choice_bs_set = [
+        Car.policy_minimum,
+        Car.policy_best_effort,
+        Car.policy_entropy
+    ]  # algorithm to choice bs by signals
 
     def __init__(self, time_unit=1):
         # convert time units
@@ -236,7 +255,7 @@ class Map:
             if random.choices([True, False], [prob, 1 - prob])[0]:
                 new_car = Car((en[0], en[1]), list(self.entry_v[en]),
                               self.car_calling_prob, self.car_calling_interval_mean)
-                new_car.choice_bs = self.car_choice_bs_function
+                # new_car.choice_bs = self.car_choice_bs_function
                 self.cars.append(new_car)
                 count += 1
         return count
@@ -271,30 +290,34 @@ class Map:
     def handoff(self):
         # handoff according to selected algorithm
         # choice bs function in Car class : choice_bs(car, bss) => bs
-        handoff_count = 0
+        handoff_count = {}
 
-        for car in self.cars:
-            if car.is_just_handoff > 0:
-                # this value can be used to plot color to inform if this just handoff
-                car.is_just_handoff -= 0
+        for choice_bs in self.car_choice_bs_set:
+            handoff_count[choice_bs] = 0
+            for car in self.cars:
+                if car.is_just_handoff[choice_bs] > 0:
+                    # this value can be used to plot color to inform if this just handoff
+                    car.is_just_handoff[choice_bs] -= self.time_unit
 
-            if car.is_calling:
-                # new_bs = car.choice_bs(car, self.bss)
-                new_bs = car.choice_bs(car)
-
-                if car.bs is None:
-                    # initial connect
-                    car.bs = new_bs
-                elif new_bs != car.bs:
-                    # do handoff
-                    handoff_count += 1
-                    car.is_just_handoff = 30
-                    car.bs = new_bs
-        for bs in self.bss:
-            bs.car_count = 0
-        for car in self.cars:
-            if car.bs:
-                car.bs.car_count += 1
+                if car.is_calling:
+                    new_bs = choice_bs(car)
+                    # car.bs should contain every choice_bs(lambda) as key
+                    if car.bs[choice_bs] is None:
+                        # initial connect
+                        car.bs[choice_bs] = new_bs
+                    elif new_bs != car.bs[choice_bs]:
+                        # do handoff
+                        handoff_count[choice_bs] += 1
+                        car.is_just_handoff[choice_bs] = 30
+                        car.bs[choice_bs] = new_bs
+                    else:
+                        # keep connecting
+                        pass
+            for bs in self.bss:
+                bs.car_count[choice_bs] = 0
+            for car in self.cars:
+                if car.bs[choice_bs]:
+                    car.bs.car_count[choice_bs] += 1
 
         return handoff_count
 
