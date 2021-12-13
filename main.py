@@ -34,6 +34,7 @@ class Car:
     def __init__(self, pos, v, calling_prob, calling_interval_mean, choice_bs_set,
                  time_unit=time_unit):
         self.pos = np.array(pos)
+        # v is km/time_unit (time_unit multiplication handled by Map)
         self.v = np.array(v)
         self.cur_section = self.get_section(self.pos)
         self.calling_prob = calling_prob
@@ -51,7 +52,6 @@ class Car:
 
     def turn(self, is_left):
         self.v = np.cross((self.v[0], self.v[1], 0), (0, 0, -1 if is_left else 1))[0:2]
-        # print(self.v)
 
     @staticmethod
     def turn_vec(v, is_left):
@@ -176,10 +176,12 @@ class BaseStation:
 
 class Map:
     time_unit = 1  # seconds/frame
-    car_in_lambda = 1 / 12  # car per second
+    car_in_lambda_s = 1 / 12  # car per second
+    car_in_lambda = None
 
     # calling parameters
-    car_calling_prob = 2 / 60 / 60  # calls/second
+    car_calling_prob_s = 2 / 60 / 60  # calls/second
+    car_calling_prob = None
     car_calling_interval_mean = 180  # seconds/call
 
     # car_in_entry_lambda = None  # prob for each entry
@@ -188,20 +190,23 @@ class Map:
     eys = 10
     width = 2.5
 
-    car_v_val = (72 / 18 * 5) / 1000  # in km/s
+    car_v_val_s = (72 / 18 * 5) / 1000  # in km/s
+    car_v_val = None  # in km/time_unit
 
     t_power = 120  # transmitting power
 
     car_choice_bs_set = [
-        (lambda c, cur_bs: Car.policy_minimum(c, cur_bs, 100)),
+        (lambda c, cur_bs: Car.policy_minimum(c, cur_bs, 25)),
         Car.policy_best_effort,
-        (lambda c, cur_bs: Car.policy_entropy(c, cur_bs, 25))
+        (lambda c, cur_bs: Car.policy_entropy(c, cur_bs, 15))
     ]  # algorithm to choice bs by signals
 
-    def __init__(self, time_unit=1):
+    def __init__(self, _time_unit=1):
         # convert time units
-        self.car_in_lambda /= self.time_unit
-        self.car_v_val *= self.time_unit
+        self.time_unit = _time_unit
+        self.car_in_lambda = self.car_in_lambda_s * self.time_unit
+        self.car_v_val = self.car_v_val_s * self.time_unit
+        self.car_calling_prob = self.car_calling_prob_s * self.time_unit
 
         # Length in km
         # freq in MHz
@@ -238,7 +243,9 @@ class Map:
         bs_indexes = random.sample(range(self.exs * self.eys), bss_counts)
         freq = 100
         for index in bs_indexes:
-            self.bss.append(BaseStation((index // self.eys * width + width / 2, index % self.eys * width + width / 2),
+            off_x, off_y = random.choice([(0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)])
+            self.bss.append(BaseStation((index // self.eys * width + width / 2 + off_x,
+                                         index % self.eys * width + width / 2 + off_y),
                                         freq, self.t_power))
             freq += 100
         return
@@ -261,7 +268,7 @@ class Map:
             if random.choices([True, False], [prob, 1 - prob])[0]:
                 new_car = Car((en[0], en[1]), list(self.entry_v[en]),
                               self.car_calling_prob, self.car_calling_interval_mean,
-                              self.car_choice_bs_set)
+                              self.car_choice_bs_set, self.time_unit)
                 # new_car.choice_bs = self.car_choice_bs_function
                 self.cars.append(new_car)
                 count += 1
@@ -344,10 +351,8 @@ class Map:
     def signal_path_loss(freq, dist):
         # freq(MHZ), dist(km)
         # print(freq, dist)
-        if dist != 0:
-            return 32.45 + 20 * math.log10(freq) + 20 * math.log10(dist)
-        else:
-            return 32.45 + 20 * math.log10(freq)
+
+        return 32.45 + 20 * math.log10(freq) + 20 * math.log10(dist)
 
     def received_signal_power(self, pt, pos1, pos2, freq):
         # pt = Transmitting power (dB)
@@ -358,15 +363,17 @@ class Map:
 
 if __name__ == '__main__':
     print('hello')
-    m = Map()
+    time_unit = 10
+    m = Map(time_unit)
     m.setup_bss(10, 2.5)
     # m.car_choice_bs_function = lambda c: Car.policy_minimum(c, 100)
     # pprint.pprint(m.bss)
     # exit(0)
     plt.ion()
-    h_count = 0
+    h_count = {}
     current_time = 0
     selected_choice_bs = m.car_choice_bs_set[1]
+    choice_bs_names = ['minimum', 'best_effort', 'entropy']
     # color setting
     car_color = 'steelblue'
     car_calling_color = 'red'
@@ -380,14 +387,19 @@ if __name__ == '__main__':
         xt.append(x)
         yt.append(x)
         x += 2.5
-
+    plt.figure(figsize=(13, 5))
     while True:
         start_time = time.perf_counter()
-        current_time += 1
-        h_count += m.next_frame()[selected_choice_bs]
+        current_time += time_unit
+        count_result = m.next_frame()
+        for choice_bs, hc in count_result.items():
+            if choice_bs in h_count:
+                h_count[choice_bs] += hc
+            else:
+                h_count[choice_bs] = hc
         print('-' * 20)
         print('car count:', len(m.cars))
-        print('handoff count:', h_count)
+        # print('handoff count:\n', h_count)
 
         xs = [c.pos[0] for c in m.cars]
         ys = [c.pos[1] for c in m.cars]
@@ -412,18 +424,25 @@ if __name__ == '__main__':
 
         bs_freqs = [b.freq for b in m.bss]
         for i, txt in enumerate(bs_freqs):
-            plt.annotate(txt, (base_xs[i], base_ys[i]))
+            plt.annotate(txt // 100, (base_xs[i], base_ys[i]))
         plt.grid(True)
         # pprint.pprint(m.bss)
-        plt.subplot(122)
-        bs_index = [i for i in range(len(m.bss))]
+        plt.subplot(143)
+        plt.title('base station service count')
+        bs_index = [str(bs.freq // 100) for bs in m.bss]
         bs_service_counts = [b.car_count[selected_choice_bs] for b in m.bss]
-        plt.xticks(bs_index)
+        # plt.xticks(bs_index)
         plt.bar(bs_index, bs_service_counts)
         print(bs_service_counts)
 
+        plt.subplot(144)
+        name_h_count = []
+        for i, cbs in enumerate(m.car_choice_bs_set):
+            print('handoff:', choice_bs_names[i], '=', h_count[cbs])
+            name_h_count.append(h_count[cbs])
+        plt.bar(choice_bs_names, name_h_count)
+
         plt.draw()
-        # time.sleep(1)
         interval = 0.04
         print('pause:', (start_time + interval) - time.perf_counter())
         delay_time = (start_time + interval) - time.perf_counter()
