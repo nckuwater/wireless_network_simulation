@@ -5,6 +5,7 @@ import numpy as np
 import random
 import pprint
 import matplotlib.pyplot as plt
+from matplotlib.widgets import RadioButtons
 
 
 class Car:
@@ -157,13 +158,19 @@ class Car:
         new_signal_powers = {}
         for bs, p in car.signal_powers.items():
             car_bs_vec = (bs.pos - car.pos)
-            car_bs_vec = car_bs_vec / np.linalg.norm(car_bs_vec)
-            new_signal_powers[bs] = p + np.dot(car.v / car.time_unit, car_bs_vec) * 20
+            car_bs_vec = car_bs_vec / abs(np.linalg.norm(car_bs_vec))
+            predict_dist = np.dot(car.v / car.time_unit, car_bs_vec) * 300
+            new_signal_powers[bs] = p + predict_dist
         best_bs = max(new_signal_powers, key=new_signal_powers.get)
         if current_bs is None:
-            return best_bs
-        if new_signal_powers[current_bs] < min_sp:
-            return best_bs
+            if car.signal_powers[best_bs] >= min_sp:
+                return best_bs
+            else:
+                return max(car.signal_powers, key=car.signal_powers.get)
+        if car.signal_powers[current_bs] < min_sp:
+            return max(car.signal_powers, key=car.signal_powers.get)
+        # if new_signal_powers[current_bs] < min_sp:
+        #     return best_bs
         return current_bs
 
 
@@ -192,7 +199,7 @@ class Map:
     # calling parameters
     car_calling_prob_s = 2 / 60 / 60  # calls/second
     car_calling_prob = None
-    car_calling_interval_mean = 180  # seconds/call
+    car_calling_interval_mean = 5 * 60  # seconds/call
 
     # car_in_entry_lambda = None  # prob for each entry
     # number of blocks
@@ -208,7 +215,7 @@ class Map:
     car_choice_bs_set = [
         (lambda c, cur_bs: Car.policy_minimum(c, cur_bs, 25)),
         Car.policy_best_effort,
-        (lambda c, cur_bs: Car.policy_entropy(c, cur_bs, 15)),
+        (lambda c, cur_bs: Car.policy_entropy(c, cur_bs, 10)),
         (lambda c, cur_bs: Car.policy_diy(c, cur_bs, 25))
     ]  # algorithm to choice bs by signals
 
@@ -357,7 +364,7 @@ class Map:
                         # do handoff
                         # print('handoff:', old_bs.freq, new_bs.freq)
                         handoff_count[cbs] += 1
-                        car.is_just_handoff[cbs] = 30
+                        car.is_just_handoff[cbs] = 15
                         car.bs[cbs] = new_bs
 
                         car.bs[cbs].car_count[cbs] += 1
@@ -399,7 +406,8 @@ if __name__ == '__main__':
     current_time = 0
 
     # setup algorithm here
-    selected_choice_bs = m.car_choice_bs_set[1]
+    selected_choice_bs_index = 0
+    selected_choice_bs = m.car_choice_bs_set[selected_choice_bs_index]
     choice_bs_names = ['minimum', 'best_effort', 'entropy', 'diy']  # this number must match algo set in map
 
     # color setting
@@ -448,7 +456,7 @@ if __name__ == '__main__':
                 # print(c.pos, 'connect to', c.bs[selected_choice_bs].freq)
                 plt.plot((c.pos[0], c.bs[selected_choice_bs].pos[0]),
                          (c.pos[1], c.bs[selected_choice_bs].pos[1]),
-                         c=('yellow' if c.is_just_handoff[selected_choice_bs] == 0 else 'red'))
+                         c=('orange' if c.is_just_handoff[selected_choice_bs] == 0 else 'red'))
 
         bs_freqs = [b.freq for b in m.bss]
         for i, txt in enumerate(bs_freqs):
@@ -469,12 +477,28 @@ if __name__ == '__main__':
             print('handoff:', choice_bs_names[i], '=', h_count[cbs])
             name_h_count.append(h_count[cbs])
         plt.bar(choice_bs_names, name_h_count)
+        for i, hc in enumerate(name_h_count):
+            plt.text(i, hc + .02, str(hc), fontweight='bold')
+
+
+        axcolor = 'white'
+        rax = plt.axes([0.01, 0.25, 0.07, 0.20],
+                       facecolor=axcolor)
+        radio = RadioButtons(rax, choice_bs_names, selected_choice_bs_index)
+
+
+        def handler(labels):
+            global selected_choice_bs_index, selected_choice_bs
+            selected_choice_bs_index = choice_bs_names.index(labels)
+            selected_choice_bs = m.car_choice_bs_set[selected_choice_bs_index]
+
+        radio.on_clicked(handler)
 
         plt.draw()
         interval = 0.04
         print('pause:', (start_time + interval) - time.perf_counter())
-        delay_time = (start_time + interval) - time.perf_counter()
-        if delay_time > 0:
-            plt.pause(delay_time)
-        plt.pause(0.01)
+        # delay_time = (start_time + interval) - time.perf_counter()
+        # if delay_time > 0:
+        #     plt.pause(delay_time)
+        plt.pause(0.001)
         plt.clf()
