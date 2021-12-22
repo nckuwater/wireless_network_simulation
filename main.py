@@ -153,8 +153,18 @@ class Car:
         return current_bs
 
     @staticmethod
-    def policy_diy(car, current_bs):
-        pass
+    def policy_diy(car, current_bs, min_sp):
+        new_signal_powers = {}
+        for bs, p in car.signal_powers.items():
+            car_bs_vec = (bs.pos - car.pos)
+            car_bs_vec = car_bs_vec / np.linalg.norm(car_bs_vec)
+            new_signal_powers[bs] = p + np.dot(car.v / car.time_unit, car_bs_vec) * 20
+        best_bs = max(new_signal_powers, key=new_signal_powers.get)
+        if current_bs is None:
+            return best_bs
+        if new_signal_powers[current_bs] < min_sp:
+            return best_bs
+        return current_bs
 
 
 class BaseStation:
@@ -198,7 +208,8 @@ class Map:
     car_choice_bs_set = [
         (lambda c, cur_bs: Car.policy_minimum(c, cur_bs, 25)),
         Car.policy_best_effort,
-        (lambda c, cur_bs: Car.policy_entropy(c, cur_bs, 15))
+        (lambda c, cur_bs: Car.policy_entropy(c, cur_bs, 15)),
+        (lambda c, cur_bs: Car.policy_diy(c, cur_bs, 25))
     ]  # algorithm to choice bs by signals
 
     def __init__(self, _time_unit=1):
@@ -240,14 +251,28 @@ class Map:
 
     def setup_bss(self, bss_counts=10, width=width):
         # random setup bss (list(BaseStation))
-        bs_indexes = random.sample(range(self.exs * self.eys), bss_counts)
+        # FIX 10 Method (Deprecated)
+        # bs_indexes = random.sample(range(self.exs * self.eys), bss_counts)
+        # freq = 100
+        # for index in bs_indexes:
+        #     off_x, off_y = random.choice([(0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)])
+        #     self.bss.append(BaseStation((index // self.eys * width + width / 2 + off_x,
+        #                                  index % self.eys * width + width / 2 + off_y),
+        #                                 freq, self.t_power))
+        #     freq += 100
+        prob = bss_counts / (self.exs * self.eys)
         freq = 100
-        for index in bs_indexes:
-            off_x, off_y = random.choice([(0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)])
-            self.bss.append(BaseStation((index // self.eys * width + width / 2 + off_x,
-                                         index % self.eys * width + width / 2 + off_y),
-                                        freq, self.t_power))
-            freq += 100
+        index = 0
+        for pos in range(self.exs * self.eys):
+            if random.random() <= prob:
+                off_x, off_y = random.choice([(0.1, 0), (-0.1, 0), (0, 0.1), (0, -0.1)])
+                self.bss.append(BaseStation((pos // self.eys * width + width / 2 + off_x,
+                                             pos % self.eys * width + width / 2 + off_y),
+                                            freq, self.t_power))
+                index += 1
+                freq += 100
+                if freq > 1000:
+                    freq = 100
         return
 
     def next_frame(self):
@@ -363,7 +388,7 @@ class Map:
 
 if __name__ == '__main__':
     print('hello')
-    time_unit = 10
+    time_unit = 1
     m = Map(time_unit)
     m.setup_bss(10, 2.5)
     # m.car_choice_bs_function = lambda c: Car.policy_minimum(c, 100)
@@ -372,8 +397,11 @@ if __name__ == '__main__':
     plt.ion()
     h_count = {}
     current_time = 0
+
+    # setup algorithm here
     selected_choice_bs = m.car_choice_bs_set[1]
-    choice_bs_names = ['minimum', 'best_effort', 'entropy']
+    choice_bs_names = ['minimum', 'best_effort', 'entropy', 'diy']  # this number must match algo set in map
+
     # color setting
     car_color = 'steelblue'
     car_calling_color = 'red'
@@ -424,7 +452,7 @@ if __name__ == '__main__':
 
         bs_freqs = [b.freq for b in m.bss]
         for i, txt in enumerate(bs_freqs):
-            plt.annotate(txt // 100, (base_xs[i], base_ys[i]))
+            plt.annotate(txt, (base_xs[i], base_ys[i]))
         plt.grid(True)
         # pprint.pprint(m.bss)
         plt.subplot(143)
