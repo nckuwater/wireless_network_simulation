@@ -194,6 +194,7 @@ class BaseStation:
 class Map:
     time_unit = 1  # seconds/frame
     car_in_lambda_s = 1 / 12  # car per second
+    # car_in_lambda_s = 1 / 9  # car per second
     car_in_lambda = None
 
     # calling parameters
@@ -213,10 +214,10 @@ class Map:
     t_power = 120  # transmitting power
 
     car_choice_bs_set = [
-        (lambda c, cur_bs: Car.policy_minimum(c, cur_bs, 25)),
+        (lambda c, cur_bs: Car.policy_minimum(c, cur_bs, 20)),
         Car.policy_best_effort,
-        (lambda c, cur_bs: Car.policy_entropy(c, cur_bs, 10)),
-        (lambda c, cur_bs: Car.policy_diy(c, cur_bs, 25))
+        (lambda c, cur_bs: Car.policy_entropy(c, cur_bs, 25)),  # 10
+        (lambda c, cur_bs: Car.policy_diy(c, cur_bs, 20))
     ]  # algorithm to choice bs by signals
 
     def __init__(self, _time_unit=1):
@@ -279,7 +280,7 @@ class Map:
                 index += 1
                 freq += 100
                 if freq > 1000:
-                    freq = 100
+                    freq = 800
         return
 
     def next_frame(self):
@@ -472,6 +473,7 @@ if __name__ == '__main__':
         print(bs_service_counts)
 
         plt.subplot(144)
+        plt.title('handoff count')
         name_h_count = []
         for i, cbs in enumerate(m.car_choice_bs_set):
             print('handoff:', choice_bs_names[i], '=', h_count[cbs])
@@ -496,7 +498,7 @@ if __name__ == '__main__':
 
         plt.draw()
         interval = 0.04
-        print('pause:', (start_time + interval) - time.perf_counter())
+        # print('pause:', (start_time + interval) - time.perf_counter())
         # delay_time = (start_time + interval) - time.perf_counter()
         # if delay_time > 0:
         #     plt.pause(delay_time)
